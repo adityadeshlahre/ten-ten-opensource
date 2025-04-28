@@ -13,3 +13,7 @@ basic react-native applciation based on p2p(pear-2-pear) architecture {with audi
 - Users can cut the joined call/reject call
 - Users who recives call should have no option to silent the comming connection { just for fun }
 - many more
+
+### Demo 
+
+![webSocketEmu](https://github.com/user-attachments/assets/f50df11f-b7cd-4708-9ee3-81b62189deb7)

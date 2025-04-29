@@ -7,15 +7,19 @@ import {
 
 const configuration = {
   iceServers: [
-    { urls: "stun:stun.l.google.com:19302" }, // Use Google's public STUN server
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
   ],
 };
 
 class WebRTCClient {
   private peerConnection: RTCPeerConnection;
-  public socket: WebSocket;
+  private socket: WebSocket;
   private localStream!: MediaStream;
   private targetCode: string = "";
+  private myCode: string = "";
+  private remoteStream!: MediaStream;
+  public onRemoteStream: ((stream: MediaStream) => void) | null = null;
 
   constructor(signalingServerUrl: string) {
     this.socket = new WebSocket(signalingServerUrl);
@@ -27,7 +31,7 @@ class WebRTCClient {
   private async init() {
     this.localStream = await mediaDevices.getUserMedia({
       audio: true,
-      video: false,
+      video: true,
     });
 
     this.localStream.getTracks().forEach((track: any) => {
@@ -36,7 +40,11 @@ class WebRTCClient {
 
     this.socket.onmessage = async (event) => {
       const message = JSON.parse(event.data);
-      console.log("Signaling message received", message);
+
+      if (message.code) {
+        this.myCode = message.code;
+        return;
+      }
 
       if (message.data.type === "offer") {
         await this.peerConnection.setRemoteDescription(
@@ -67,11 +75,37 @@ class WebRTCClient {
 
     this.peerConnection.addEventListener("icecandidate", (event: any) => {
       if (event.candidate) {
-        this.socket.send(JSON.stringify({ data: event.candidate }));
         this.socket.send(
           JSON.stringify({
+            from: this.myCode,
             targetCode: this.targetCode,
             data: event.candidate,
+          })
+        );
+      }
+    });
+
+    this.peerConnection.addEventListener("track", (event: any) => {
+      if (!this.remoteStream) {
+        this.remoteStream = new MediaStream();
+      }
+
+      if (event.track) {
+        this.remoteStream.addTrack(event.track);
+      }
+
+      if (this.onRemoteStream) {
+        this.onRemoteStream(this.remoteStream);
+      }
+
+      if (this.remoteStream) {
+        const remoteStreamUrl = this.remoteStream.toURL();
+        console.log("Remote stream URL:", remoteStreamUrl);
+        this.socket.send(
+          JSON.stringify({
+            from: this.myCode,
+            targetCode: this.targetCode,
+            data: { remoteStreamUrl },
           })
         );
       }
@@ -79,18 +113,83 @@ class WebRTCClient {
   }
 
   public async call(targetCode: string) {
-    this.targetCode = targetCode;
-    const offer = await this.peerConnection.createOffer({
-      offerToReceiveAudio: true,
-      offerToReceiveVideo: false,
-    });
-    await this.peerConnection.setLocalDescription(offer);
+    try {
+      this.targetCode = targetCode;
+      const offer = await this.peerConnection.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true,
+      });
 
-    this.socket.send(JSON.stringify({ targetCode, data: offer }));
+      try {
+        await this.peerConnection.setLocalDescription(offer);
+      } catch (err) {
+        console.error("Error in setLocalDescription:", err);
+        return;
+      }
+
+      if (this.socket.readyState === WebSocket.OPEN) {
+        this.socket.send(
+          JSON.stringify({
+            targetCode,
+            data: {
+              type: offer.type,
+              sdp: offer.sdp,
+            },
+          })
+        );
+      } else {
+        console.warn("WebSocket not open. Cannot send offer.");
+      }
+    } catch (error) {
+      console.error("Error during call():", error);
+    }
+  }
+  public async endCall() {
+    try {
+      this.peerConnection.close();
+
+      if (this.localStream) {
+        this.localStream.getTracks().forEach((track) => {
+          track.stop();
+        });
+      }
+
+      if (this.remoteStream) {
+        if (this.onRemoteStream) {
+          this.onRemoteStream(new MediaStream());
+        }
+      }
+
+      if (this.socket.readyState === WebSocket.OPEN) {
+        this.socket.send(
+          JSON.stringify({
+            from: this.myCode,
+            targetCode: this.targetCode,
+            data: { type: "endCall" },
+          })
+        );
+      } else {
+        console.warn("WebSocket not open. Cannot send end call signal.");
+      }
+
+      this.targetCode = "";
+      this.remoteStream = undefined as any;
+      this.localStream = undefined as any;
+    } catch (error) {
+      console.error("Error during endCall():", error);
+    }
   }
 
   public getLocalStream() {
     return this.localStream;
+  }
+
+  public getRemoteStream() {
+    return this.remoteStream;
+  }
+
+  public getSocket() {
+    return this.socket;
   }
 }
 

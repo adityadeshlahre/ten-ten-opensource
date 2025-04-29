@@ -29,9 +29,9 @@ class SignalingServer {
 
         if (message.targetCode && this.users.has(message.targetCode)) {
           const targetSocket = this.users.get(message.targetCode);
-          targetSocket?.send(
-            JSON.stringify({ from: userCode, data: message.data })
-          );
+          const from = (message as any).from ?? userCode;
+
+          targetSocket?.send(JSON.stringify({ from, data: message.data }));
         }
       });
 
